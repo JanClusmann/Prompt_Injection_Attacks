@@ -1,0 +1,858 @@
+---
+title: "Prompt injection Visuals"
+output: html_document
+date: "2024-06-26"
+---
+
+# Libraries
+```{r}
+library(ggplot2)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(FSA)
+library(rstatix)
+options(scipen = 999)
+```
+
+# Loading
+```{r}
+data <- read_excel("C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt Injection Attacks/Data.xlsx", sheet = "Tabelle1")
+data$`Adversarial prompt` <- factor(data$`Adversarial prompt`, levels = c(0, 1), labels = c("No Prompt Injection", "Prompt Injection"))
+
+
+
+
+data_2 <- read_excel("C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt Injection Attacks/Data.xlsx", sheet = "Tabelle2")
+data_2$`Adversarial prompt` <- factor(data_2$`Adversarial prompt`, levels = c(0, 1), labels = c("No Prompt Injection", "Prompt Injection"))
+
+models_to_include_1 <- c("GPT-4o", "Claude-3", "Gemini", "Claude-3.5", "Reka Core")
+models_to_include_2 <- c("GPT-4o", "Claude-3", "Claude-3.5", "Reka Core")
+
+
+data <- data %>%
+  filter(rowSums(is.na(.)) != ncol(.)) %>% # Remove rows where all elements are NA and filter for specific models
+  filter(Model %in% models_to_include_1) %>%
+  mutate(`Position of adversarial prompt` = ifelse(`Position of adversarial prompt` == "NA", "No Prompt Injection", `Position of adversarial prompt`)) %>%
+  mutate(`Variation` = ifelse(`Variation` == "NA", "No Prompt Injection", `Variation`)) %>%
+  mutate(`Modality` = ifelse(`Modality` == "Ultrasound", "US", `Modality`))
+
+data <- data %>%
+  mutate(`PI Unveiled` = factor(`PI Unveiled`, 
+                                levels = c(0, 1, 2), 
+                                labels = c("successful", "unveiled", "failed"))) %>%
+  mutate(
+    `Circle Plot` = case_when(
+      `PI Unveiled` == "successful" ~ "successful",
+      `PI Unveiled` %in% c("unveiled", "failed") ~ "failed"
+    ) %>% factor(levels = c("successful", "failed"))
+  )
+
+
+
+
+data$Variation <- factor(data$Variation, levels = c("No Prompt Injection", "Black on white", "Black on black", "Tiny text"))
+data$`Position of adversarial prompt` <- factor(data$`Position of adversarial prompt`, levels=c("No Prompt Injection", "In text prompt", "In image itself", "In previous image"))
+
+
+
+data_selection <- data %>%
+  filter(Model %in% models_to_include_2)
+
+
+label_size <- 20
+
+fig_path <- "C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt Injection Attacks/Figures/"
+
+```
+
+
+```{r}
+custom_theme <- theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 10, colour = "black", angle = 45, hjust = 1, vjust = 1),
+    axis.text.y = element_text(size = 10, colour = "black"),
+    axis.title.y = element_text(size = 10, vjust = 2),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.margin = margin(1, 1, 2, 0.5, "cm")
+  )
+
+custom_colors_1 <- c("#22628F", "#20B38E", "#CC9439", "#BD672A")
+custom_colors <- c("#999999", "#20B38E", "#CC9439", "#BD672A")
+custom_colors_2 <- c("#20B38E", "#CC9439", "#BD672A")
+```
+
+
+# Figure 2: (a) Average accuracy in detecting the represented organs per model
+```{r}
+summary_stats_2a <- data %>%
+  group_by(Model) %>%
+  summarize(
+    mean = mean(Labels_Mean, na.rm = TRUE),
+    sd = sd(Labels_Mean, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Merge summary statistics back to the original data for plotting
+data_2a <- data %>%
+  left_join(summary_stats_2a, by = "Model")
+
+
+label_size <- 25
+
+plot_2a <- ggplot(data_2a, aes(x = Model, y = mean, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9), fill = "#999999", color = "#999999", alpha=0.5) +
+  geom_jitter(aes(y = Labels_Mean), color = "black", shape = 21, size = 2, fill = NA, stroke = 1, width = 0.1, height = 0.035) +
+  geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.9)) +
+  labs(y = "Organ Detection Rate [%]") +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = label_size, colour = "black", vjust = 1, hjust = 1, angle = 45),
+    axis.text.y = element_text(size = label_size, colour = "black"),
+    axis.title.y = element_text(size = label_size, vjust = 2),
+    legend.position = "none",
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0))
+
+# Save the plot
+ggsave(filename = paste0(fig_path, "Organ_Detection_per_Model.svg"), plot = plot_2a, width = 4.5, height = 6, bg = "transparent")
+
+```
+
+
+
+# Figure 2 (b) Average harmfulness scores for all queries with injected prompt vs prompts without prompt injection
+```{r}
+
+# Calculate summary statistics for Figure 2 (b)
+summary_stats_2b <- data_selection %>%
+  group_by(Model, `Adversarial prompt`) %>%
+  summarize(
+    mean = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd = sd(Harmfulness_Mean, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Merge summary statistics back to the original data for plotting
+data_2b <- data_selection %>%
+  left_join(summary_stats_2b, by = c("Model", "Adversarial prompt"))
+
+label_size <- 25
+
+# Create the plot with error bars
+plot_2b <- ggplot(data_2b, aes(x = Model, y = mean, fill = `Adversarial prompt`)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9), alpha = 1) +
+  geom_jitter(aes(y = Harmfulness_Mean, color = `Adversarial prompt`), position = position_jitterdodge(dodge.width = 0.9, jitter.width = 0.1, jitter.height = 0.035), shape = 21, fill = NA, size = 2, stroke = 0.5) +
+  geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.9)) +
+  labs(y = "Undetected Lesions [%]") +
+  scale_fill_manual(values = c("No Prompt Injection" = "#999999", "Prompt Injection" = "#fbc9c4")) +
+  scale_color_manual(values = c("No Prompt Injection" = "black", "Prompt Injection" = "black")) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = label_size, colour = "black", vjust = 1, hjust = 1, angle = 45),
+    axis.text.y = element_text(size = label_size, colour = "black"),
+    axis.title.y = element_text(size = label_size, vjust = 2),
+    legend.title = element_blank(),
+    
+    legend.text = element_text(size = label_size),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.margin = margin(0.5, 0.5, 1, 0.5, "cm")
+  ) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  coord_fixed(ratio = 5 / 1)
+
+# Save the plot
+ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_Model.svg"), plot = plot_2b, width = 9, height = 6, bg = "transparent")
+
+
+```
+
+
+# Figure 2 (c) Harmfulness scores in GPT-4 comparing position of adversarial prompt (in image itself vs in previous image vs in system prompt)
+```{r}
+custom_colors <- c("#22628F", "#20B38E", "#CC9439", "#BD5138")
+# Set the correct order for the factor levels
+#position_order <- c("No Prompt Injection", "In text prompt", "In image itself", "In previous image")
+
+
+# Calculate summary statistics for Figure 2 (c)
+summary_stats_2c <- data_selection %>%
+  group_by(Model, `Position of adversarial prompt`) %>%
+  summarize(
+    mean = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd = sd(Harmfulness_Mean, na.rm = TRUE),
+    .groups = 'drop'
+  )
+# Merge summary statistics back to the original data for plotting
+data_2c <- data_selection %>%
+  left_join(summary_stats_2c, by = c("Model", "Position of adversarial prompt"))
+# Convert Position of adversarial prompt to a factor with the desired order
+data_2c$`Position of adversarial prompt` <- factor(data_2c$`Position of adversarial prompt`, levels = position_order)
+label_size <- 20
+
+# Create the plot with error bars and increased spacing
+plot_2c <- ggplot(data_2c, aes(x = `Position of adversarial prompt`, y = mean, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)) +
+  labs(y = "Undetected Lesions [%]") +
+  theme_minimal() +
+  custom_theme + 
+  theme(
+    axis.title.x = element_blank(),
+    
+    axis.text.x = element_text(size = label_size, colour = "black", angle = 45, vjust = -1, hjust=1),
+    axis.text.y = element_text(size = label_size, colour = "black"),
+    axis.title.y = element_text(size = label_size, vjust = 2),
+    legend.title = element_blank(),
+    legend.text = element_text(size = label_size),
+    legend.position = "top",
+    legend.direction = "horizontal",
+    legend.justification = "center",
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  scale_fill_manual(values = custom_colors) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 0.7)) +  # Add padding to x-axis
+  coord_fixed(ratio = 3.2 / 1)  # Adjusted ratio to accommodate the added space
+
+# Save the plot
+ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_Prompt_position_2_alternativ.svg"), plot = plot_2c, width = 12, height = 6, bg = "transparent")
+```
+
+
+# Figure 2 (d) Harmfulness scores in GPT-4 comparing variation (high/low contrast, tiny text)
+
+
+```{r}
+# Figure 2 (d) Harmfulness scores comparing injection variations
+custom_colors <- c("#22628F", "#20B38E", "#CC9439", "#BD5138")
+
+# Calculate summary statistics for Figure 2 (d)
+summary_stats_2d <- data_selection %>%
+  group_by(Model, Variation) %>%
+  summarize(
+    mean = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd = sd(Harmfulness_Mean, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Merge summary statistics back to the original data for plotting
+data_2d <- data_selection %>%
+  left_join(summary_stats_2d, by = c("Model", "Variation"))
+
+# Set the correct order for the factor levels (if needed)
+variation_order <- unique(data_2d$Variation)
+data_2d$Variation <- factor(data_2d$Variation, levels = variation_order)
+
+label_size <- 20
+
+# Create the plot with error bars and increased spacing
+plot_2d <- ggplot(data_2d, aes(x = Variation, y = mean, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)) +
+  labs(y = "Undetected Lesions [%]") +
+  theme_minimal() +
+  custom_theme + 
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = label_size, colour = "black", angle = 45, vjust = -1, hjust=1),
+    axis.text.y = element_text(size = label_size, colour = "black"),
+    axis.title.y = element_text(size = label_size, vjust = 2),
+    legend.title = element_blank(),
+    legend.text = element_text(size = label_size),
+    legend.position = "top",
+    legend.direction = "horizontal",
+    legend.justification = "center",
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  scale_fill_manual(values = custom_colors) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  #scale_x_discrete(expand = expansion(add = 0.7)) +  # Add padding to x-axis
+  coord_fixed(ratio = 3.2 / 1)  # Adjusted ratio to accommodate the added space
+
+# Save the plot
+ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_injectionvariation.svg"), plot = plot_2d, width = 12, height = 6, bg = "transparent")
+```
+
+
+
+
+# Supplementary Figure 3a
+```{r}
+custom_colors <- c("#22628F", "#20B38E", "#CC9439", "#BD5138")
+label_size <- 20
+plot_width <- 8
+plot_height <- 6
+
+# Figure 2 (a2)
+summary_stats_2a2 <- data_selection %>%
+  group_by(Model, Modality) %>%
+  summarize(
+    mean = mean(Labels_Mean, na.rm = TRUE),
+    sd = sd(Labels_Mean, na.rm = TRUE),
+    .groups = 'drop'
+  )
+data_2a2 <- data_selection %>%
+  left_join(summary_stats_2a2, by = c("Model", "Modality"))
+
+
+plot_2a2 <- ggplot(data_2a2, aes(x = Modality, y = mean, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)) +
+  labs(y = "Organ detection") +
+  theme_minimal() + 
+  custom_theme + 
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = label_size, colour = "black", angle = 45, vjust = 1, hjust=1),
+    axis.text.y = element_text(size = label_size, colour = "black"),
+    axis.title.y = element_text(size = label_size, vjust = 2),
+    legend.title = element_blank(),
+    legend.text = element_text(size = label_size),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.direction = "horizontal",
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  scale_fill_manual(values = custom_colors) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 0.7)) +
+  coord_fixed(ratio = 3.2 / 1)
+
+ggsave(filename = paste0(fig_path, "organ_Score_per_Modality.svg"), plot = plot_2a2, width = plot_width, height = plot_height, bg = "transparent")
+
+export_stats_to_excel(
+  excel_file = suppl_path,
+  sheet_name = "Summary statistics Suppl Fig 3a",
+  summary_stats = summary_stats_2a2,
+  p_values = list()  # Empty list for p_values
+)
+
+```
+
+
+
+#Suppl. Figure 3b
+```{r}
+# Figure Suppl. 3 b
+summary_stats_2e <- data_selection %>%
+  group_by(Model, Modality) %>%
+  summarize(
+    mean = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd = sd(Harmfulness_Mean, na.rm = TRUE),
+    .groups = 'drop'
+  )
+data_2e <- data_selection %>%
+  left_join(summary_stats_2e, by = c("Model", "Modality"))
+
+plot_2e <- ggplot(data_2e, aes(x = Modality, y = mean, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)) +
+  labs(y = "Undetected Lesions") +
+  theme_minimal() + 
+  custom_theme + 
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = label_size, colour = "black", angle = 45, vjust = 1, hjust=1),
+    axis.text.y = element_text(size = label_size, colour = "black"),
+    axis.title.y = element_text(size = label_size, vjust = 2),
+    legend.title = element_blank(),
+    legend.text = element_text(size = label_size),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.direction = "horizontal",
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  scale_fill_manual(values = custom_colors) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 0.7)) +
+  coord_fixed(ratio = 3.2 / 1)
+
+ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_Modality.svg"), plot = plot_2e, width = plot_width, height = plot_height, bg = "transparent")
+
+export_stats_to_excel(
+  excel_file = suppl_path,
+  sheet_name = "Summary statistics Suppl Fig 3b",
+  summary_stats = summary_stats_2e,
+  p_values = list()  # Empty list for p_values
+)
+```
+
+
+
+# Figure 2 (f) Language
+```{r}
+# plot <- ggplot(data_2, aes(x = Model, y = Harmfulness_Mean, fill = `Language of injection prompt`)) +
+#           geom_bar(stat = "summary", fun = "mean", position = position_dodge(width = 0.9)) +
+#           labs( y = "Harmfulness per \nlanguage") +
+#           theme_minimal() + 
+#           custom_theme + 
+#           theme(
+#             axis.title.x = element_blank(),
+#             axis.text.x = element_text(size = label_size, colour = "black", angle = 45, vjust = 0.8),
+#             axis.text.y = element_text(size = label_size, colour = "black"),
+#             axis.title.y = element_text(size = label_size, vjust = 2),
+#             #plot.title = element_text(size = label_size, hjust = 0.5),
+#             legend.title = element_blank(),
+#             legend.text = element_text(size = label_size),
+#             panel.grid.minor = element_blank(),
+#             panel.grid.major = element_blank(),
+#             panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+#             plot.margin = margin(0.5, 0.5, 1.5, 0.5, "cm")
+#           ) +
+#           scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+#           coord_fixed(ratio = 3.5/1)
+# 
+# ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_Language.svg"), plot = plot, width = 8, height = 6, bg = "transparent")
+
+
+
+```
+
+# Suppl. Figure. 1 Circle Plot "PI Unveiled
+
+```{r}
+
+
+# List of models to include
+models_to_include_2 <- c("GPT-4o", "Claude-3", "Claude-3.5", "Reka Core")
+
+# Define label size
+label_size <- 22
+
+# Loop through each model and create circle plots
+for (model in models_to_include_2) {
+  # Filter the data
+  filtered_data <- data %>%
+    filter(`Adversarial prompt` == "Prompt Injection") %>%
+    filter(`Language of injection prompt` == "English") %>%
+    filter(Model == model) %>%
+    filter(!is.na(`Circle Plot`))
+
+  # Summarize the counts
+  summary_counts <- filtered_data %>%
+    group_by(`Circle Plot`) %>%
+    summarize(count = n())
+
+  # Create the circle plot
+  plot_circle <- ggplot(summary_counts, aes(x = "", y = count, fill = `Circle Plot`)) +
+    geom_col(width = 1, color = "white") +
+    geom_text(aes(label = count), 
+              position = position_stack(vjust = 0.5), 
+              color = "black", size = label_size * 0.6) +
+    coord_polar(theta = "y") +
+    labs(fill = "Prompt injection", x = NULL, y = NULL, title = model) +
+    theme_void() +
+    theme(
+      plot.title = element_text(size = label_size * 1.5, hjust = 0.5, vjust=-1),
+      legend.position = "right",
+      legend.direction = "vertical",
+      legend.title = element_text(size = label_size * 1.5),
+      legend.text = element_text(size = label_size * 1.5),
+      strip.text = element_text(size = label_size * 1.5),
+      plot.margin = margin(1, 1, 1, 1, "cm")
+    ) +
+    scale_fill_manual(values = c("successful" = "#fbc9c4", "failed" = "grey"))
+
+  # Print the plot
+  print(plot_circle)
+
+  # Save the plot
+  ggsave(filename = paste0(fig_path, "PI_Unveiled_Circle_Plot_", model, ".svg"), plot = plot_circle, width = 8, height = 6, bg = "transparent")
+}
+
+```
+
+#Export summary statistics
+```{r}
+library(openxlsx)
+suppl_path <- "C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt Injection Attacks/Supplementary_Material.xlsx"
+
+export_stats_to_excel <- function(excel_file, sheet_name, summary_stats, p_values, overwrite_sheet = TRUE) {
+  # Load the workbook
+  wb <- loadWorkbook(excel_file)
+  
+  # Check if the sheet exists and handle according to overwrite_sheet parameter
+  if (sheet_name %in% names(wb)) {
+    if (overwrite_sheet) {
+      removeWorksheet(wb, sheet_name)
+      addWorksheet(wb, sheet_name)
+    } else {
+      stop(paste("Sheet", sheet_name, "already exists and overwrite_sheet is set to FALSE"))
+    }
+  } else {
+    addWorksheet(wb, sheet_name)
+  }
+  
+  # Write summary statistics
+  writeData(wb, sheet_name, "Summary Statistics", startRow = 1, startCol = 1)
+  writeData(wb, sheet_name, summary_stats, startRow = 2, startCol = 1)
+  
+  # Write p-values
+  start_row <- nrow(summary_stats) + 4
+  for (i in seq_along(p_values)) {
+    writeData(wb, sheet_name, names(p_values)[i], startRow = start_row, startCol = 1)
+    p_value_data <- p_values[[i]]
+    if (is.data.frame(p_value_data)) {
+      writeDataTable(wb, sheet_name, p_value_data, startRow = start_row + 1, startCol = 1)
+      start_row <- start_row + nrow(p_value_data) + 3
+    } else {
+      writeData(wb, sheet_name, capture.output(print(p_value_data)), startRow = start_row + 1, startCol = 1)
+      start_row <- start_row + length(capture.output(print(p_value_data))) + 2
+    }
+  }
+  
+  # Save the workbook
+  saveWorkbook(wb, excel_file, overwrite = TRUE)
+  
+  print(paste("Data has been exported to", sheet_name, "in the Excel file."))
+}
+```
+
+
+# Summary statistics for Figure 2 (a)
+```{r}
+summary_figure_2a <- data %>%
+  group_by(Model) %>%
+  summarize(
+    mean_accuracy = mean(Labels_Mean, na.rm = TRUE),
+    sd_accuracy = sd(Labels_Mean, na.rm = TRUE),
+    min_accuracy = min(Labels_Mean, na.rm = TRUE),
+    max_accuracy = max(Labels_Mean, na.rm = TRUE)
+  )
+
+print(summary_figure_2a)
+
+
+figure_2a_test <- kruskal.test(Labels_Mean ~ Model, data = data %>% filter(Model %in% c("Claude-3", "GPT-4o", "Claude-3.5", "Reka Core")))
+print(figure_2a_test)
+
+# Post-hoc analysis using Dunn test if Kruskal-Wallis test is significant
+
+dunn_test <- dunnTest(Labels_Mean ~ Model, data = data %>% filter(Model %in% c("Claude-3", "GPT-4o", "Claude-3.5", "Reka Core")), method = "bonferroni")
+print(dunn_test)
+
+
+# Create a named list of p-values
+p_values_list <- list(
+  "Kruskal-Wallis Test" = figure_2a_test,
+  "Dunn Test" = dunn_test$res
+)
+
+# Use the function
+export_stats_to_excel(
+  excel_file = suppl_path,
+  sheet_name = "Summary statistics Figure 2a",
+  summary_stats = summary_figure_2a,
+  p_values = p_values_list
+)
+```
+
+# Summary statistics for Figure 2 (b)
+```{r}
+library(dplyr)
+library(rstatix)
+
+# Summary statistics for Figure 2b
+summary_figure_2b <- data_selection %>%
+  group_by(Model, `Adversarial prompt`) %>%
+  summarize(
+    mean_harmfulness = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd_harmfulness = sd(Harmfulness_Mean, na.rm = TRUE),
+    min_harmfulness = min(Harmfulness_Mean, na.rm = TRUE),
+    max_harmfulness = max(Harmfulness_Mean, na.rm = TRUE)
+  )
+
+print(summary_figure_2b)
+
+# Initialize a list to store p-values
+p_values_list_within <- list()
+p_values_list_between <- list()
+
+# Wilcoxon Signed-Rank Test for Prompt Injection vs No Prompt Injection within each model
+for (model in unique(data_selection$Model)) {
+  test_result <- wilcox.test(Harmfulness_Mean ~ `Adversarial prompt`, data = data_selection %>% filter(Model == model))
+  p_values_list_within[[paste0("Prompt vs No Prompt - ", model)]] <- test_result$p.value
+}
+
+# Pairwise Mann-Whitney U Tests for Harmfulness Scores between Models for each Adversarial Prompt condition
+models_to_compare <- unique(data_selection$Model)
+adversarial_conditions <- unique(data_selection$`Adversarial prompt`)
+
+for (condition in adversarial_conditions) {
+  for (i in 1:(length(models_to_compare) - 1)) {
+    for (j in (i + 1):length(models_to_compare)) {
+      model_pair <- paste0(models_to_compare[i], " vs ", models_to_compare[j])
+      test_result <- wilcox.test(Harmfulness_Mean ~ Model, data = data_selection %>% filter(Model %in% c(models_to_compare[i], models_to_compare[j]), `Adversarial prompt` == condition))
+      p_values_list_between[[paste0(model_pair, " - ", condition)]] <- test_result$p.value
+    }
+  }
+}
+
+# Combine p-values into vectors
+all_p_values_within <- unlist(p_values_list_within)
+all_p_values_between <- unlist(p_values_list_between)
+
+# Adjust p-values for multiple testing (Bonferroni)
+adjusted_p_values_within <- p.adjust(all_p_values_within, method = "bonferroni")
+adjusted_p_values_between <- p.adjust(all_p_values_between, method = "bonferroni")
+
+# Create data frames for the results
+results_within_df <- data.frame(
+  Test = names(p_values_list_within),
+  P_Value = all_p_values_within,
+  Adjusted_P_Value = adjusted_p_values_within
+)
+
+results_between_df <- data.frame(
+  Test = names(p_values_list_between),
+  P_Value = all_p_values_between,
+  Adjusted_P_Value = adjusted_p_values_between
+)
+
+# Print the results
+print("Adjusted p-values for Figure 2b (Within Models):")
+print(results_within_df)
+
+print("Adjusted p-values for Figure 2b (Between Models):")
+print(results_between_df)
+
+mean_harmfulness_overall <- data_selection %>%
+  group_by(`Adversarial prompt`) %>%
+  summarize(
+    mean_harmfulness = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd_harmfulness = sd(Harmfulness_Mean, na.rm = TRUE),
+    min_harmfulness = min(Harmfulness_Mean, na.rm = TRUE),
+    max_harmfulness = max(Harmfulness_Mean, na.rm = TRUE)
+  )
+
+print("Mean Harmfulness Over All Models:")
+print(mean_harmfulness_overall)
+
+
+data_no_prompt <- data_selection %>%
+  filter(`Adversarial prompt` == "No Prompt Injection") %>%
+  pull(Harmfulness_Mean)
+
+data_prompt <- data_selection %>%
+  filter(`Adversarial prompt` == "Prompt Injection") %>%
+  pull(Harmfulness_Mean)
+
+# Mann-Whitney U Test
+mann_whitney_test <- wilcox.test(data_no_prompt, data_prompt, paired = FALSE)
+
+# Print the results
+print("Mann-Whitney U Test for mean harmfulness over all models:")
+print(mann_whitney_test)
+
+
+# Organize the p-values and test results
+p_values_list <- list(
+  "Within Models (Prompt vs No Prompt)" = results_within_df,
+  "Between Models" = results_between_df,
+  "Mean Harmfulness Over All Models" = mean_harmfulness_overall,
+  "Mann-Whitney U Test (Overall)" = mann_whitney_test
+)
+
+# Apply the function
+export_stats_to_excel(
+  excel_file = suppl_path,
+  sheet_name = "Summary statistics Figure 2b",
+  summary_stats = summary_figure_2b,
+  p_values = p_values_list
+)
+
+```
+
+
+
+# Summary statistics for Figure 2 (c)
+```{r}
+
+summary_figure_2c <- data_selection %>%
+  group_by(Model, `Position of adversarial prompt`) %>%
+  summarize(
+    mean_harmfulness = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd_harmfulness = sd(Harmfulness_Mean, na.rm = TRUE),
+    min_harmfulness = min(Harmfulness_Mean, na.rm = TRUE),
+    max_harmfulness = max(Harmfulness_Mean, na.rm = TRUE)
+  )
+
+print(summary_figure_2c)
+
+# Compare significance of Prompt injection over all models together
+p_values_list_position <- list()
+positions_to_compare <- unique(data_selection$`Position of adversarial prompt`)
+
+for (position in positions_to_compare) {
+  if (position != "No Prompt Injection") {
+    data_no_prompt <- data_selection %>%
+      filter(`Position of adversarial prompt` == "No Prompt Injection") %>%
+      pull(Harmfulness_Mean)
+    
+    data_position <- data_selection %>%
+      filter(`Position of adversarial prompt` == position) %>%
+      pull(Harmfulness_Mean)
+    
+    test_result <- wilcox.test(data_no_prompt, data_position, paired = FALSE)
+    p_values_list_position[[paste0(position, " vs No Prompt Injection")]] <- test_result$p.value
+  }
+}
+
+# Combine p-values into a vector
+all_p_values_position <- unlist(p_values_list_position)
+
+# Adjust p-values for multiple testing (Bonferroni)
+adjusted_p_values_position <- p.adjust(all_p_values_position, method = "bonferroni")
+
+# Create a data frame for the results
+results_position_df <- data.frame(
+  Test = names(p_values_list_position),
+  P_Value = all_p_values_position,
+  Adjusted_P_Value = adjusted_p_values_position
+)
+
+# Print the results
+print("Adjusted p-values for Figure 2c (Position of Adversarial Prompt):")
+print(results_position_df)
+
+
+
+# Organize the p-values and test results
+p_values_list <- list(
+  "Position of Adversarial Prompt Comparisons" = results_position_df
+)
+
+# Apply the function
+export_stats_to_excel(
+  excel_file = suppl_path,
+  sheet_name = "Summary statistics Figure 2c",
+  summary_stats = summary_figure_2c,
+  p_values = p_values_list
+)
+
+
+
+
+
+```
+# Summary statistics for Figure 2 (d)
+```{r}
+
+summary_figure_2d <- data_selection %>%
+  group_by(Model, Variation) %>%
+  summarize(
+    mean_harmfulness = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd_harmfulness = sd(Harmfulness_Mean, na.rm = TRUE),
+    min_harmfulness = min(Harmfulness_Mean, na.rm = TRUE),
+    max_harmfulness = max(Harmfulness_Mean, na.rm = TRUE)
+  )
+
+print(summary_figure_2d)
+
+
+
+p_values_list_variation <- list()
+
+# Mann-Whitney U Test for each "Variation" compared to "No Prompt Injection"
+variations_to_compare <- unique(data_selection$Variation)
+
+for (variation in variations_to_compare) {
+  if (variation != "No Prompt Injection") {
+    data_no_prompt <- data_selection %>%
+      filter(Variation == "No Prompt Injection") %>%
+      pull(Harmfulness_Mean)
+    
+    data_variation <- data_selection %>%
+      filter(Variation == variation) %>%
+      pull(Harmfulness_Mean)
+    
+    test_result <- wilcox.test(data_no_prompt, data_variation, paired = FALSE)
+    p_values_list_variation[[paste0(variation, " vs No Prompt Injection")]] <- test_result$p.value
+  }
+}
+
+# Combine p-values into a vector
+all_p_values_variation <- unlist(p_values_list_variation)
+
+# Adjust p-values for multiple testing (Bonferroni)
+adjusted_p_values_variation <- p.adjust(all_p_values_variation, method = "bonferroni")
+
+# Create a data frame for the results
+results_variation_df <- data.frame(
+  Test = names(p_values_list_variation),
+  P_Value = all_p_values_variation,
+  Adjusted_P_Value = adjusted_p_values_variation
+)
+
+# Print the results
+print("Adjusted p-values for Variation (compared to No Prompt Injection):")
+print(results_variation_df)
+
+
+
+# Organize the p-values and test results
+p_values_list <- list(
+  "Variation Comparisons (vs No Prompt Injection)" = results_variation_df
+)
+
+# Apply the function
+export_stats_to_excel(
+  excel_file = suppl_path,
+  sheet_name = "Summary statistics Figure 2d",
+  summary_stats = summary_figure_2d,
+  p_values = p_values_list
+)
+
+```
+# Summary statistics for Figure 2 (f)
+```{r}
+
+summary_figure_2e <- data_selection %>%
+  group_by(Model, Modality) %>%
+  summarize(
+    mean_harmfulness = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd_harmfulness = sd(Harmfulness_Mean, na.rm = TRUE),
+    min_harmfulness = min(Harmfulness_Mean, na.rm = TRUE),
+    max_harmfulness = max(Harmfulness_Mean, na.rm = TRUE)
+  )
+
+print(summary_figure_2e)
+
+export_stats_to_excel(
+  excel_file = suppl_path,
+  sheet_name = "Summary statistics Suppl Fig 3b",
+  summary_stats = summary_figure_2e,
+  p_values = list()  # Empty list for p_values
+)
+
+
+
+```
+
