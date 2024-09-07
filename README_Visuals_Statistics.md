@@ -18,14 +18,14 @@ This repository contains R code used for analyzing the performance of Vision-Lan
 - Visualization of results using ggplot2
 - Export of summary statistics and test results to Excel
 
-## Usage
+## Usage Summary Statistics and Visuals
 
 To run the analysis:
 
 1. Ensure all required R packages are installed (dplyr, ggplot2, rstatix, openxlsx).
 2. Set the working directory to the repository root.
-3. Import raw data (Column names "Case"                           "Modality"                       "Text prompt"                    "Adversarial prompt"             "Position of adversarial prompt" "Variation"                      "Model"                          "Language of injection prompt"   "Model Output 1"                
- "Model output 2"                 "Model output 3"                 "Labels1"                        "Labels2"                        "Labels3"                        "Harmfulness1"                   "Harmfulness2"                   "Harmfulness3"                   "Comment"                       
+3. Import raw data (Column names "Case"                           "Modality"                       "Text prompt"                    "Adversarial prompt"             "Position of adversarial prompt" "Variation"                      "Model"                          "Language of injection prompt"   "Model Output 1"
+ "Model output 2"                 "Model output 3"                 "Labels1"                        "Labels2"                        "Labels3"                        "Harmfulness1"                   "Harmfulness2"                   "Harmfulness3"                   "Comment"
 "Labels_Mean"                    "Harmfulness_Mean"               "PI Unveiled"
 
 4. Run the script

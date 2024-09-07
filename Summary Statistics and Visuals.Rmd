@@ -1,5 +1,5 @@
 ---
-title: "Prompt injection Visuals"
+title: "Prompt injection Attack Visuals"
 output: html_document
 date: "2024-06-26"
 ---
@@ -13,18 +13,21 @@ library(tidyr)
 library(gridExtra)
 library(FSA)
 library(rstatix)
+library(scales)
+library(RColorBrewer)
+library(openxlsx)
 options(scipen = 999)
 ```
 
-# Loading
+# Loading data
 ```{r}
-data <- read_excel("C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt Injection Attacks/Data.xlsx", sheet = "Tabelle1")
+data <- read_excel("C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt_Injection_Attacks/Supplementary_Material_1.xlsx", sheet = "ST1 Raw Data")
 data$`Adversarial prompt` <- factor(data$`Adversarial prompt`, levels = c(0, 1), labels = c("No Prompt Injection", "Prompt Injection"))
 
 
 
 
-data_2 <- read_excel("C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt Injection Attacks/Data.xlsx", sheet = "Tabelle2")
+data_2 <- read_excel("C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt_Injection_Attacks/Data.xlsx", sheet = "Tabelle2")
 data_2$`Adversarial prompt` <- factor(data_2$`Adversarial prompt`, levels = c(0, 1), labels = c("No Prompt Injection", "Prompt Injection"))
 
 models_to_include_1 <- c("GPT-4o", "Claude-3", "Gemini", "Claude-3.5", "Reka Core")
@@ -36,9 +39,10 @@ data <- data %>%
   filter(Model %in% models_to_include_1) %>%
   mutate(`Position of adversarial prompt` = ifelse(`Position of adversarial prompt` == "NA", "No Prompt Injection", `Position of adversarial prompt`)) %>%
   mutate(`Variation` = ifelse(`Variation` == "NA", "No Prompt Injection", `Variation`)) %>%
-  mutate(`Modality` = ifelse(`Modality` == "Ultrasound", "US", `Modality`))
-
-data <- data %>%
+  mutate(`Modality` = ifelse(`Modality` == "Ultrasound", "US", `Modality`)) %>%
+  mutate(Modality = ifelse(Modality == "HE", "Histology", Modality)) %>%
+  mutate(Modality = ifelse(Modality == "CT-A", "CT", Modality))%>%
+  mutate(Modality = ifelse(Modality == "Skin picture", "Photography", Modality)) %>%
   mutate(`PI Unveiled` = factor(`PI Unveiled`, 
                                 levels = c(0, 1, 2), 
                                 labels = c("successful", "unveiled", "failed"))) %>%
@@ -49,25 +53,75 @@ data <- data %>%
     ) %>% factor(levels = c("successful", "failed"))
   )
 
-
-
-
-data$Variation <- factor(data$Variation, levels = c("No Prompt Injection", "Black on white", "Black on black", "Tiny text"))
+data$Variation <- factor(data$Variation, levels = c("No Prompt Injection", "Black on white", "Black on black", "Tiny text", "In text prompt"))
 data$`Position of adversarial prompt` <- factor(data$`Position of adversarial prompt`, levels=c("No Prompt Injection", "In text prompt", "In image itself", "In previous image"))
 
 
-
 data_selection <- data %>%
-  filter(Model %in% models_to_include_2)
+  filter(Model %in% models_to_include_2) #select only relevant models
 
+data_selection_essentials <- data_selection %>% #trim columns
+  select(-(c("Circle Plot", "PI Unveiled", "Spalte1", "Harmfulness_Mean", "Labels_Mean")))
 
+data_long <- data_selection_essentials %>% # create separate row for every single measurement
+  pivot_longer(
+    cols = c(starts_with("Harmfulness"), starts_with("Model_output"), starts_with("Labels")),
+    names_to = c(".value", "set"),
+    names_pattern = "(.+?)(\\d)$",
+    values_to = "value"
+  ) %>%
+  mutate(Labels = as.numeric(Labels)) %>%
+  mutate(Harmfulness = as.numeric(Harmfulness))
+
+# Define variables for figures and tables
 label_size <- 20
-
-fig_path <- "C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt Injection Attacks/Figures/"
+fig_path <- "C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt_Injection_Attacks/Figures/"
+suppl_path <- "C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt_Injection_Attacks/Supplementary_Material_1.xlsx"
 
 ```
 
+#Define Export summary statistics/Color Scheme
+```{r}
+export_stats_to_excel <- function(excel_file, sheet_name, summary_stats, p_values, overwrite_sheet = TRUE) {
+  wb <- loadWorkbook(excel_file)
+  # Check if the sheet exists and handle according to overwrite_sheet parameter
+  if (sheet_name %in% names(wb)) {
+    if (overwrite_sheet) {
+      removeWorksheet(wb, sheet_name)
+      addWorksheet(wb, sheet_name)
+    } else {
+      stop(paste("Sheet", sheet_name, "already exists and overwrite_sheet is set to FALSE"))
+    }
+  } else {
+    addWorksheet(wb, sheet_name)
+  }
+  
+  # Write summary statistics
+  writeData(wb, sheet_name, "Summary Statistics", startRow = 1, startCol = 1)
+  writeData(wb, sheet_name, summary_stats, startRow = 2, startCol = 1)
+  
+  # Write p-values
+  start_row <- nrow(summary_stats) + 4
+  for (i in seq_along(p_values)) {
+    writeData(wb, sheet_name, names(p_values)[i], startRow = start_row, startCol = 1)
+    p_value_data <- p_values[[i]]
+    if (is.data.frame(p_value_data)) {
+      writeDataTable(wb, sheet_name, p_value_data, startRow = start_row + 1, startCol = 1)
+      start_row <- start_row + nrow(p_value_data) + 3
+    } else {
+      writeData(wb, sheet_name, capture.output(print(p_value_data)), startRow = start_row + 1, startCol = 1)
+      start_row <- start_row + length(capture.output(print(p_value_data))) + 2
+    }
+  }
+  
+  # Save the workbook
+  saveWorkbook(wb, excel_file, overwrite = TRUE)
+  
+  print(paste("Data has been exported to", sheet_name, "in the Excel file."))
+}
+```
 
+#Define theme for visuals
 ```{r}
 custom_theme <- theme_minimal() +
   theme(
@@ -86,16 +140,17 @@ custom_theme <- theme_minimal() +
 custom_colors_1 <- c("#22628F", "#20B38E", "#CC9439", "#BD672A")
 custom_colors <- c("#999999", "#20B38E", "#CC9439", "#BD672A")
 custom_colors_2 <- c("#20B38E", "#CC9439", "#BD672A")
+
 ```
 
 
 # Figure 2: (a) Average accuracy in detecting the represented organs per model
 ```{r}
-summary_stats_2a <- data %>%
+summary_stats_2a <- data_long %>%
   group_by(Model) %>%
   summarize(
-    mean = mean(Labels_Mean, na.rm = TRUE),
-    sd = sd(Labels_Mean, na.rm = TRUE),
+    mean_labels = mean(Labels, na.rm = TRUE),
+    sd_labels = sd(Labels, na.rm = TRUE),
     .groups = 'drop'
   )
 
@@ -155,7 +210,7 @@ plot_2b <- ggplot(data_2b, aes(x = Model, y = mean, fill = `Adversarial prompt`)
   geom_bar(stat = "identity", position = position_dodge(width = 0.9), alpha = 1) +
   geom_jitter(aes(y = Harmfulness_Mean, color = `Adversarial prompt`), position = position_jitterdodge(dodge.width = 0.9, jitter.width = 0.1, jitter.height = 0.035), shape = 21, fill = NA, size = 2, stroke = 0.5) +
   geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.9)) +
-  labs(y = "Undetected Lesions [%]") +
+  labs(y = "Lesion Miss Rate [%]") +
   scale_fill_manual(values = c("No Prompt Injection" = "#999999", "Prompt Injection" = "#fbc9c4")) +
   scale_color_manual(values = c("No Prompt Injection" = "black", "Prompt Injection" = "black")) +
   theme_minimal() +
@@ -186,7 +241,7 @@ ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_Model.svg"), plot = pl
 ```{r}
 custom_colors <- c("#22628F", "#20B38E", "#CC9439", "#BD5138")
 # Set the correct order for the factor levels
-#position_order <- c("No Prompt Injection", "In text prompt", "In image itself", "In previous image")
+position_order <- c("No Prompt Injection", "In text prompt", "In image itself", "In previous image")
 
 
 # Calculate summary statistics for Figure 2 (c)
@@ -208,7 +263,9 @@ label_size <- 20
 plot_2c <- ggplot(data_2c, aes(x = `Position of adversarial prompt`, y = mean, fill = Model)) +
   geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
   geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)) +
-  labs(y = "Undetected Lesions [%]") +
+  # geom_jitter(data = data_selection, aes(y = Harmfulness_Mean, color = Model), shape = 21, fill = NA, size = 2, stroke = 0.5,
+  #             position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.15)) +
+  labs(y = "Lesion Miss Rate [%]") +
   theme_minimal() +
   custom_theme + 
   theme(
@@ -244,6 +301,8 @@ ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_Prompt_position_2_alte
 # Figure 2 (d) Harmfulness scores comparing injection variations
 custom_colors <- c("#22628F", "#20B38E", "#CC9439", "#BD5138")
 
+position_order <- c("No Prompt Injection", "In text prompt", "In image itself", "In previous image")
+
 # Calculate summary statistics for Figure 2 (d)
 summary_stats_2d <- data_selection %>%
   group_by(Model, Variation) %>%
@@ -251,14 +310,16 @@ summary_stats_2d <- data_selection %>%
     mean = mean(Harmfulness_Mean, na.rm = TRUE),
     sd = sd(Harmfulness_Mean, na.rm = TRUE),
     .groups = 'drop'
-  )
+  ) %>%
+  filter(Variation != "In text prompt")
 
 # Merge summary statistics back to the original data for plotting
 data_2d <- data_selection %>%
-  left_join(summary_stats_2d, by = c("Model", "Variation"))
+  left_join(summary_stats_2d, by = c("Model", "Variation")) %>%
+  filter(Variation != "In text prompt")
 
 # Set the correct order for the factor levels (if needed)
-variation_order <- unique(data_2d$Variation)
+variation_order <- c("No Prompt Injection", "Black on white", "Black on black", "Tiny text")
 data_2d$Variation <- factor(data_2d$Variation, levels = variation_order)
 
 label_size <- 20
@@ -267,7 +328,7 @@ label_size <- 20
 plot_2d <- ggplot(data_2d, aes(x = Variation, y = mean, fill = Model)) +
   geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
   geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)) +
-  labs(y = "Undetected Lesions [%]") +
+  labs(y = "Lesion Miss Rate [%]") +
   theme_minimal() +
   custom_theme + 
   theme(
@@ -297,7 +358,7 @@ ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_injectionvariation.svg
 
 
 
-# Supplementary Figure 3a
+# Suppl. Figure 3a
 ```{r}
 custom_colors <- c("#22628F", "#20B38E", "#CC9439", "#BD5138")
 label_size <- 20
@@ -316,10 +377,21 @@ data_2a2 <- data_selection %>%
   left_join(summary_stats_2a2, by = c("Model", "Modality"))
 
 
+avg_by_modality <- summary_stats_2a2 %>%
+  group_by(Modality) %>%
+  summarize(avg_detection_rate = mean(mean, na.rm = TRUE))
+
+modality_order <- avg_by_modality %>% # Order the levels of Modality factor based on the average detection rate
+  arrange(desc(avg_detection_rate)) %>%
+  pull(Modality)
+
+data_2a2$Modality <- factor(data_2a2$Modality, levels = modality_order) # Update the factor levels in the main dataset
+
+
 plot_2a2 <- ggplot(data_2a2, aes(x = Modality, y = mean, fill = Model)) +
   geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
   geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)) +
-  labs(y = "Organ detection") +
+  labs(y = "Organ Detection Rate [%]") +
   theme_minimal() + 
   custom_theme + 
   theme(
@@ -340,16 +412,11 @@ plot_2a2 <- ggplot(data_2a2, aes(x = Modality, y = mean, fill = Model)) +
   scale_fill_manual(values = custom_colors) +
   scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
   scale_x_discrete(expand = expansion(add = 0.7)) +
-  coord_fixed(ratio = 3.2 / 1)
+  coord_fixed(ratio = 4 / 1)
 
 ggsave(filename = paste0(fig_path, "organ_Score_per_Modality.svg"), plot = plot_2a2, width = plot_width, height = plot_height, bg = "transparent")
 
-export_stats_to_excel(
-  excel_file = suppl_path,
-  sheet_name = "Summary statistics Suppl Fig 3a",
-  summary_stats = summary_stats_2a2,
-  p_values = list()  # Empty list for p_values
-)
+
 
 ```
 
@@ -365,13 +432,30 @@ summary_stats_2e <- data_selection %>%
     sd = sd(Harmfulness_Mean, na.rm = TRUE),
     .groups = 'drop'
   )
+
+# Calculate overall mean per Modality
+overall_mean_per_modality <- data_selection %>%
+  group_by(Modality) %>%
+  summarize(
+    mean = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd = sd(Harmfulness_Mean, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  mutate(Model = "Overall")
+
+# Combine model-specific and overall statistics
+summary_stats_combined <- bind_rows(summary_stats_2e, overall_mean_per_modality)
+
+
 data_2e <- data_selection %>%
   left_join(summary_stats_2e, by = c("Model", "Modality"))
+
+data_2e$Modality <- factor(data_2e$Modality, levels = modality_order)
 
 plot_2e <- ggplot(data_2e, aes(x = Modality, y = mean, fill = Model)) +
   geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
   geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = pmin(mean + sd, 1)), width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)) +
-  labs(y = "Undetected Lesions") +
+  labs(y = "Lesion Miss Rate [%]") +
   theme_minimal() + 
   custom_theme + 
   theme(
@@ -392,148 +476,132 @@ plot_2e <- ggplot(data_2e, aes(x = Modality, y = mean, fill = Model)) +
   scale_fill_manual(values = custom_colors) +
   scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
   scale_x_discrete(expand = expansion(add = 0.7)) +
-  coord_fixed(ratio = 3.2 / 1)
+  coord_fixed(ratio = 4 / 1) #changed from 3.2 to 4 for revision
 
 ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_Modality.svg"), plot = plot_2e, width = plot_width, height = plot_height, bg = "transparent")
-
-export_stats_to_excel(
-  excel_file = suppl_path,
-  sheet_name = "Summary statistics Suppl Fig 3b",
-  summary_stats = summary_stats_2e,
-  p_values = list()  # Empty list for p_values
-)
 ```
 
 
 
-# Figure 2 (f) Language
 ```{r}
-# plot <- ggplot(data_2, aes(x = Model, y = Harmfulness_Mean, fill = `Language of injection prompt`)) +
-#           geom_bar(stat = "summary", fun = "mean", position = position_dodge(width = 0.9)) +
-#           labs( y = "Harmfulness per \nlanguage") +
-#           theme_minimal() + 
-#           custom_theme + 
-#           theme(
-#             axis.title.x = element_blank(),
-#             axis.text.x = element_text(size = label_size, colour = "black", angle = 45, vjust = 0.8),
-#             axis.text.y = element_text(size = label_size, colour = "black"),
-#             axis.title.y = element_text(size = label_size, vjust = 2),
-#             #plot.title = element_text(size = label_size, hjust = 0.5),
-#             legend.title = element_blank(),
-#             legend.text = element_text(size = label_size),
-#             panel.grid.minor = element_blank(),
-#             panel.grid.major = element_blank(),
-#             panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
-#             plot.margin = margin(0.5, 0.5, 1.5, 0.5, "cm")
-#           ) +
-#           scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
-#           coord_fixed(ratio = 3.5/1)
+# Calculate attack success rate
+attack_success_rate <- data_selection %>%
+  group_by(Model, Modality, `Adversarial prompt`) %>%
+  summarize(
+    mean_LMR = mean(Harmfulness_Mean, na.rm = TRUE),
+    sd_LMR = sd(Harmfulness_Mean, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  pivot_wider(
+    names_from = `Adversarial prompt`,
+    values_from = c(mean_LMR, sd_LMR),
+    names_glue = "{.value}_{`Adversarial prompt`}"
+  ) %>%
+  mutate(
+    Attack_Success_Rate = mean_LMR_1 - mean_LMR_0,
+    SD_Attack_Success_Rate = sqrt(sd_LMR_1^2 + sd_LMR_0^2)  # Propagation of error
+  )
+
+# Ensure Modality is a factor with the correct order
+attack_success_rate$Modality <- factor(attack_success_rate$Modality, levels = modality_order)
+
+# Create the plot
+plot_attack_success <- ggplot(attack_success_rate, aes(x = Modality, y = Attack_Success_Rate, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+  geom_errorbar(
+    aes(ymin = pmax(Attack_Success_Rate - SD_Attack_Success_Rate, 0), 
+        ymax = pmin(Attack_Success_Rate + SD_Attack_Success_Rate, 1)),
+    width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)
+  ) +
+  labs(y = "Attack Success Rate [%]") +
+  theme_minimal() + 
+  custom_theme + 
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = label_size, colour = "black", angle = 45, vjust = 1, hjust=1),
+    axis.text.y = element_text(size = label_size, colour = "black"),
+    axis.title.y = element_text(size = label_size, vjust = 2),
+    legend.title = element_blank(),
+    legend.text = element_text(size = label_size),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.direction = "horizontal",
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  scale_fill_manual(values = custom_colors) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 0.7)) +
+  coord_fixed(ratio = 4 / 1)
+
+# Save the plot
+ggsave(filename = paste0(fig_path, "Attack_Success_Rate_per_Modality.svg"), plot = plot_attack_success, width = plot_width, height = plot_height, bg = "transparent")
+
+# Print summary statistics
+print(attack_success_rate)
+```
+
+
+
+
+
+# # Suppl. Figure. 2 Circle Plot "PI Unveiled"
 # 
-# ggsave(filename = paste0(fig_path, "Harmfulness_Score_per_Language.svg"), plot = plot, width = 8, height = 6, bg = "transparent")
-
-
-
-```
-
-# Suppl. Figure. 1 Circle Plot "PI Unveiled
-
 ```{r}
-
-
-# List of models to include
-models_to_include_2 <- c("GPT-4o", "Claude-3", "Claude-3.5", "Reka Core")
-
-# Define label size
-label_size <- 22
-
-# Loop through each model and create circle plots
-for (model in models_to_include_2) {
-  # Filter the data
-  filtered_data <- data %>%
-    filter(`Adversarial prompt` == "Prompt Injection") %>%
-    filter(`Language of injection prompt` == "English") %>%
-    filter(Model == model) %>%
-    filter(!is.na(`Circle Plot`))
-
-  # Summarize the counts
-  summary_counts <- filtered_data %>%
-    group_by(`Circle Plot`) %>%
-    summarize(count = n())
-
-  # Create the circle plot
-  plot_circle <- ggplot(summary_counts, aes(x = "", y = count, fill = `Circle Plot`)) +
-    geom_col(width = 1, color = "white") +
-    geom_text(aes(label = count), 
-              position = position_stack(vjust = 0.5), 
-              color = "black", size = label_size * 0.6) +
-    coord_polar(theta = "y") +
-    labs(fill = "Prompt injection", x = NULL, y = NULL, title = model) +
-    theme_void() +
-    theme(
-      plot.title = element_text(size = label_size * 1.5, hjust = 0.5, vjust=-1),
-      legend.position = "right",
-      legend.direction = "vertical",
-      legend.title = element_text(size = label_size * 1.5),
-      legend.text = element_text(size = label_size * 1.5),
-      strip.text = element_text(size = label_size * 1.5),
-      plot.margin = margin(1, 1, 1, 1, "cm")
-    ) +
-    scale_fill_manual(values = c("successful" = "#fbc9c4", "failed" = "grey"))
-
-  # Print the plot
-  print(plot_circle)
-
-  # Save the plot
-  ggsave(filename = paste0(fig_path, "PI_Unveiled_Circle_Plot_", model, ".svg"), plot = plot_circle, width = 8, height = 6, bg = "transparent")
-}
+# 
+# 
+# # List of models to include
+# models_to_include_2 <- c("GPT-4o", "Claude-3", "Claude-3.5", "Reka Core")
+# 
+# # Define label size
+# label_size <- 22
+# 
+# # Loop through each model and create circle plots
+# for (model in models_to_include_2) {
+#   # Filter the data
+#   filtered_data <- data %>%
+#     filter(`Adversarial prompt` == "Prompt Injection") %>%
+#     #filter(`Language of injection prompt` == "English") %>%
+#     filter(Model == model) %>%
+#     filter(!is.na(`Circle Plot`))
+# 
+#   # Summarize the counts
+#   summary_counts <- filtered_data %>%
+#     group_by(`Circle Plot`) %>%
+#     summarize(count = n())
+# 
+#   # Create the circle plot
+#   plot_circle <- ggplot(summary_counts, aes(x = "", y = count, fill = `Circle Plot`)) +
+#     geom_col(width = 1, color = "white") +
+#     geom_text(aes(label = count), 
+#               position = position_stack(vjust = 0.5), 
+#               color = "black", size = label_size * 0.6) +
+#     coord_polar(theta = "y") +
+#     labs(fill = "Prompt injection", x = NULL, y = NULL, title = model) +
+#     theme_void() +
+#     theme(
+#       plot.title = element_text(size = label_size * 1.5, hjust = 0.5, vjust=-1),
+#       legend.position = "right",
+#       legend.direction = "vertical",
+#       legend.title = element_text(size = label_size * 1.5),
+#       legend.text = element_text(size = label_size * 1.5),
+#       strip.text = element_text(size = label_size * 1.5),
+#       plot.margin = margin(1, 1, 1, 1, "cm")
+#     ) +
+#     scale_fill_manual(values = c("successful" = "#fbc9c4", "failed" = "grey"))
+# 
+#   # Print the plot
+#   print(plot_circle)
+# 
+#   # Save the plot
+#   ggsave(filename = paste0(fig_path, "PI_Unveiled_Circle_Plot_", model, ".svg"), plot = plot_circle, width = 8, height = 6, bg = "transparent")
+# }
 
 ```
 
-#Export summary statistics
-```{r}
-library(openxlsx)
-suppl_path <- "C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt Injection Attacks/Supplementary_Material.xlsx"
 
-export_stats_to_excel <- function(excel_file, sheet_name, summary_stats, p_values, overwrite_sheet = TRUE) {
-  # Load the workbook
-  wb <- loadWorkbook(excel_file)
-  
-  # Check if the sheet exists and handle according to overwrite_sheet parameter
-  if (sheet_name %in% names(wb)) {
-    if (overwrite_sheet) {
-      removeWorksheet(wb, sheet_name)
-      addWorksheet(wb, sheet_name)
-    } else {
-      stop(paste("Sheet", sheet_name, "already exists and overwrite_sheet is set to FALSE"))
-    }
-  } else {
-    addWorksheet(wb, sheet_name)
-  }
-  
-  # Write summary statistics
-  writeData(wb, sheet_name, "Summary Statistics", startRow = 1, startCol = 1)
-  writeData(wb, sheet_name, summary_stats, startRow = 2, startCol = 1)
-  
-  # Write p-values
-  start_row <- nrow(summary_stats) + 4
-  for (i in seq_along(p_values)) {
-    writeData(wb, sheet_name, names(p_values)[i], startRow = start_row, startCol = 1)
-    p_value_data <- p_values[[i]]
-    if (is.data.frame(p_value_data)) {
-      writeDataTable(wb, sheet_name, p_value_data, startRow = start_row + 1, startCol = 1)
-      start_row <- start_row + nrow(p_value_data) + 3
-    } else {
-      writeData(wb, sheet_name, capture.output(print(p_value_data)), startRow = start_row + 1, startCol = 1)
-      start_row <- start_row + length(capture.output(print(p_value_data))) + 2
-    }
-  }
-  
-  # Save the workbook
-  saveWorkbook(wb, excel_file, overwrite = TRUE)
-  
-  print(paste("Data has been exported to", sheet_name, "in the Excel file."))
-}
-```
 
 
 # Summary statistics for Figure 2 (a)
@@ -568,16 +636,32 @@ p_values_list <- list(
 # Use the function
 export_stats_to_excel(
   excel_file = suppl_path,
-  sheet_name = "Summary statistics Figure 2a",
+  sheet_name = "ST4 Statistics Figure 2a",
   summary_stats = summary_figure_2a,
   p_values = p_values_list
 )
 ```
 
+
+```{r}
+summary_stats_2a <- data_long %>%
+  group_by(Model) %>%
+  summarize(
+    mean_labels = mean(Labels, na.rm = TRUE),
+    sd_labels = sd(Labels, na.rm = TRUE),
+    .groups = 'drop'
+  )
+```
+
+
 # Summary statistics for Figure 2 (b)
 ```{r}
 library(dplyr)
 library(rstatix)
+
+
+
+
 
 # Summary statistics for Figure 2b
 summary_figure_2b <- data_selection %>%
@@ -590,6 +674,15 @@ summary_figure_2b <- data_selection %>%
   )
 
 print(summary_figure_2b)
+
+attack_success_rate <- summary_figure_2b %>%
+  select(Model, `Adversarial prompt`, mean_harmfulness) %>%
+  pivot_wider(names_from = `Adversarial prompt`, values_from = mean_harmfulness) %>%
+  mutate(Attack_Success_Rate = `Prompt Injection` - `No Prompt Injection`) %>%
+  select(Model, Attack_Success_Rate)
+
+print(attack_success_rate)
+
 
 # Initialize a list to store p-values
 p_values_list_within <- list()
@@ -676,18 +769,23 @@ print(mann_whitney_test)
 p_values_list <- list(
   "Within Models (Prompt vs No Prompt)" = results_within_df,
   "Between Models" = results_between_df,
-  "Mean Harmfulness Over All Models" = mean_harmfulness_overall,
-  "Mann-Whitney U Test (Overall)" = mann_whitney_test
+  "Mean Lesion Miss Rate Over All Models" = mean_harmfulness_overall,
+  "Mann-Whitney U Test (Overall)" = mann_whitney_test,
+  "Attack Success Rate" = attack_success_rate
 )
 
 # Apply the function
 export_stats_to_excel(
   excel_file = suppl_path,
-  sheet_name = "Summary statistics Figure 2b",
+  sheet_name = "ST5 Statistics Figure 2b",
   summary_stats = summary_figure_2b,
   p_values = p_values_list
 )
 
+```
+```{r}
+print(summary_figure_2b)
+print(attack_success_rate)
 ```
 
 
@@ -752,7 +850,7 @@ p_values_list <- list(
 # Apply the function
 export_stats_to_excel(
   excel_file = suppl_path,
-  sheet_name = "Summary statistics Figure 2c",
+  sheet_name = "ST6 Statistics Figure 2c",
   summary_stats = summary_figure_2c,
   p_values = p_values_list
 )
@@ -825,34 +923,411 @@ p_values_list <- list(
 # Apply the function
 export_stats_to_excel(
   excel_file = suppl_path,
-  sheet_name = "Summary statistics Figure 2d",
+  sheet_name = "ST7 Statistics Figure 2d",
   summary_stats = summary_figure_2d,
   p_values = p_values_list
 )
 
 ```
-# Summary statistics for Figure 2 (f)
+# Stat Suppl. Fig 3a
 ```{r}
+modalities_to_compare <- unique(data_selection$Modality)
+p_values_list_modality <- list()
 
+# Perform pairwise comparisons
+for (i in 1:(length(modalities_to_compare) - 1)) {
+  for (j in (i + 1):length(modalities_to_compare)) {
+    modality1 <- modalities_to_compare[i]
+    modality2 <- modalities_to_compare[j]
+    
+    data_modality1 <- data_selection %>%
+      filter(Modality == modality1) %>%
+      pull(Labels_Mean)
+    
+    data_modality2 <- data_selection %>%
+      filter(Modality == modality2) %>%
+      pull(Labels_Mean)
+    
+    test_result <- wilcox.test(data_modality1, data_modality2, paired = FALSE)
+    p_values_list_modality[[paste0(modality1, " vs ", modality2)]] <- test_result$p.value
+  }
+}
+
+# Combine p-values into a vector
+all_p_values_modality <- unlist(p_values_list_modality)
+
+# Adjust p-values for multiple testing (Bonferroni)
+adjusted_p_values_modality <- p.adjust(all_p_values_modality, method = "bonferroni")
+
+# Create a data frame for the results
+results_modality_df <- data.frame(
+  Test = names(p_values_list_modality),
+  P_Value = all_p_values_modality,
+  Adjusted_P_Value = adjusted_p_values_modality
+)
+
+# Print the results
+print("Adjusted p-values for Organ detection Modality comparisons:")
+print(results_modality_df)
+
+
+
+export_stats_to_excel(
+  excel_file = suppl_path,
+  sheet_name = "ST8 Statistics Figure 3a",
+  summary_stats = summary_stats_2a2,
+  p_values = results_modality_df  # Empty list for p_values
+)
+
+
+```
+
+
+
+
+
+# Stat Fig 3b
+```{r}
+# Original summary
 summary_figure_2e <- data_selection %>%
   group_by(Model, Modality) %>%
   summarize(
     mean_harmfulness = mean(Harmfulness_Mean, na.rm = TRUE),
     sd_harmfulness = sd(Harmfulness_Mean, na.rm = TRUE),
     min_harmfulness = min(Harmfulness_Mean, na.rm = TRUE),
-    max_harmfulness = max(Harmfulness_Mean, na.rm = TRUE)
+    max_harmfulness = max(Harmfulness_Mean, na.rm = TRUE),
+    .groups = 'drop'
   )
 
-print(summary_figure_2e)
 
+
+################################### Statistical Tests ##################################
+
+modalities_to_compare <- unique(data_selection$Modality)
+p_values_list_modality <- list()
+
+# Perform pairwise comparisons
+for (i in 1:(length(modalities_to_compare) - 1)) {
+  for (j in (i + 1):length(modalities_to_compare)) {
+    modality1 <- modalities_to_compare[i]
+    modality2 <- modalities_to_compare[j]
+    
+    data_modality1 <- data_selection %>%
+      filter(Modality == modality1) %>%
+      pull(Harmfulness_Mean)
+    
+    data_modality2 <- data_selection %>%
+      filter(Modality == modality2) %>%
+      pull(Harmfulness_Mean)
+    
+    test_result <- wilcox.test(data_modality1, data_modality2, paired = FALSE)
+    p_values_list_modality[[paste0(modality1, " vs ", modality2)]] <- test_result$p.value
+  }
+}
+
+all_p_values_modality <- unlist(p_values_list_modality) # Combine p-values into a vector
+adjusted_p_values_modality <- p.adjust(all_p_values_modality, method = "bonferroni") 
+
+# Create a data frame for the results
+results_modality_df <- data.frame(
+  Test = names(p_values_list_modality),
+  P_Value = all_p_values_modality,
+  Adjusted_P_Value = adjusted_p_values_modality
+)
+
+# Print the results
+print("Adjusted p-values for Modality comparisons:")
+print(results_modality_df)
+
+
+
+
+
+
+# Calculate harmfulness separately for No Prompt Injection and Prompt Injection
+harmfulness_by_prompt <- data_long %>%
+  group_by(Model, Modality, `Adversarial prompt`) %>%
+  summarize(
+    mean_harmfulness = mean(Harmfulness, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  pivot_wider(
+    names_from = `Adversarial prompt`, 
+    values_from = mean_harmfulness,
+    names_prefix = "harmfulness_"
+  )
+
+print(harmfulness_by_prompt)
+
+attack_success_rate <- harmfulness_by_prompt %>%
+  mutate(
+    Attack_Success_Rate = `harmfulness_Prompt Injection` - `harmfulness_No Prompt Injection`) #%>%
+  #select(Model, Modality, Attack_Success_Rate)
+
+# Summarize Attack Success Rate per modality across all models
+attack_success_rate_per_modality <- attack_success_rate %>%
+  group_by(Modality) %>%
+  summarize(
+    mean_attack_success_rate = mean(Attack_Success_Rate, na.rm = TRUE),
+    sd_attack_success_rate = sd(Attack_Success_Rate, na.rm = TRUE),
+    min_attack_success_rate = min(Attack_Success_Rate, na.rm = TRUE),
+    max_attack_success_rate = max(Attack_Success_Rate, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+
+attack_success_rate <- attack_success_rate %>%
+  left_join(attack_success_rate_per_modality %>% select(Modality, sd_attack_success_rate), by = "Modality")
+
+
+attack_success_rate$Attack_Success_Rate <- as.numeric(attack_success_rate$Attack_Success_Rate)
+
+attack_success_rate <- attack_success_rate %>%
+  mutate(Attack_Success_Rate = ifelse(Attack_Success_Rate < 0, 0, Attack_Success_Rate))
+
+# Combine original summary with Attack Success Rate
+summary_with_attack_rate <- summary_figure_2e %>%
+  left_join(attack_success_rate, by = c("Model", "Modality"))
+
+print("Summary with Attack Success Rate:")
+print(summary_with_attack_rate)
+
+print("Attack Success Rate per Modality (across all models):")
+print(attack_success_rate_per_modality)
+
+# Unified export
+final_summary_stats <- summary_stats_combined %>%
+  left_join(attack_success_rate, by = c("Model", "Modality"))
+
+final_p_values_list <- list(
+  "Modality Comparisons" = results_modality_df,
+  "Lesion Miss Rate by Prompt Type" = harmfulness_by_prompt,
+  "Attack Success Rate" = attack_success_rate,
+  "Attack Success Rate per Modality" = attack_success_rate_per_modality,
+  "Attack Success Rate per Model" = attack_success_rate_per_model
+)
+
+# Apply the function to export to Excel
 export_stats_to_excel(
   excel_file = suppl_path,
-  sheet_name = "Summary statistics Suppl Fig 3b",
-  summary_stats = summary_figure_2e,
-  p_values = list()  # Empty list for p_values
+  sheet_name = "ST9 Statistics Figure 3b",
+  summary_stats = final_summary_stats,
+  p_values = final_p_values_list
 )
+```
+
+```{r}
+# attack_success_rate$Modality <- factor(attack_success_rate$Modality, levels = modality_order)
+# 
+# # Create the plot
+# plot_attack_success <- ggplot(attack_success_rate, aes(x = Modality, y = Attack_Success_Rate, fill = Model)) +
+#   geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+#   geom_errorbar(
+#     aes(ymin = pmax(Attack_Success_Rate - sd_attack_success_rate, 0), 
+#         ymax = pmin(Attack_Success_Rate + sd_attack_success_rate, 1)),
+#     width = 0, size = 0.5, color = "black", position = position_dodge(width = 0.8)
+#   ) +
+#   labs(y = "Attack Success Rate [%]") +
+#   theme_minimal() + 
+#   custom_theme + 
+#   theme(
+#     axis.title.x = element_blank(),
+#     axis.text.x = element_text(size = label_size, colour = "black", angle = 45, vjust = 1, hjust=1),
+#     axis.text.y = element_text(size = label_size, colour = "black"),
+#     axis.title.y = element_text(size = label_size, vjust = 2),
+#     legend.title = element_blank(),
+#     legend.text = element_text(size = label_size),
+#     legend.position = "top",
+#     legend.justification = "center",
+#     legend.direction = "horizontal",
+#     panel.grid.minor = element_blank(),
+#     panel.grid.major = element_blank(),
+#     panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+#     plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+#   ) +
+#   scale_fill_manual(values = custom_colors) +
+#   scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+#   scale_x_discrete(expand = expansion(add = 0.7)) +
+#   coord_fixed(ratio = 4 / 1)
+# 
+# # Save the plot
+# ggsave(filename = paste0(fig_path, "Attack_Success_Rate_per_Modality.svg"), plot = plot_attack_success, width = plot_width, height = plot_height, bg = "transparent")
+# 
+# ```
+# ```{r}
+# model_order <- unique(attack_success_rate$Model)
+# attack_success_rate$Model <- factor(attack_success_rate$Model, levels = model_order)
+# 
+# # Create a named vector for fill colors
+# fill_colors <- setNames(custom_colors, model_order)
+# 
+# # Create the grouped plot
+# plot_attack_success_grouped <- ggplot(attack_success_rate, aes(x = Modality, y = Attack_Success_Rate, fill = Model)) +
+#   geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+#   geom_errorbar(
+#     aes(ymin = pmax(Attack_Success_Rate - sd_attack_success_rate, 0), 
+#         ymax = pmin(Attack_Success_Rate + sd_attack_success_rate, 1)),
+#     width = 0.25, size = 0.5, color = "black", position = position_dodge(width = 0.8)
+#   ) +
+#   labs(y = "Attack Success Rate [%]", x = "Modality") +
+#   theme_minimal() + 
+#   custom_theme + 
+#   theme(
+#     axis.title.x = element_text(size = label_size, colour = "black"),
+#     axis.text.x = element_text(size = label_size, colour = "black", angle = 45, vjust = 1, hjust=1),
+#     axis.text.y = element_text(size = label_size, colour = "black"),
+#     axis.title.y = element_text(size = label_size, vjust = 2),
+#     legend.title = element_blank(),
+#     legend.text = element_text(size = label_size),
+#     legend.position = "top",
+#     legend.justification = "center",
+#     legend.direction = "horizontal",
+#     panel.grid.minor = element_blank(),
+#     panel.grid.major = element_blank(),
+#     panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+#     plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+#   ) +
+#   scale_fill_manual(values = fill_colors) +
+#   scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+#   scale_x_discrete(expand = expansion(add = 0.7)) +
+#   coord_fixed(ratio = 4 / 1)
+# 
+# # Save the grouped plot
+# ggsave(filename = paste0(fig_path, "Attack_Success_Rate_per_Model_grouped.svg"), plot = plot_attack_success_grouped, width = plot_width, height = plot_height, bg = "transparent")
+
+```
+
+# Figure 3
+## Heatmap Function
+```{r}
+create_heatmap <- function(data, value_column, row_column = "Model", col_column = "Modality", font_size = 20, title = "Heatmap", sort_x = TRUE, sort_y = TRUE, row_order_vec = NULL, col_order_vec = NULL) {
+  
+  # Ensure the value column is numeric
+  data[[value_column]] <- as.numeric(data[[value_column]])
+  
+  # Set negative values to 0 in the value column
+  data[[value_column]] <- ifelse(data[[value_column]] < 0, 0, data[[value_column]])
+  
+  # Apply the sorting order for the rows
+  if (!is.null(row_order_vec)) {
+    data <- data %>%
+      mutate(!!row_column := factor(.data[[row_column]], levels = row_order_vec))
+  } else if (sort_y) {
+    row_order <- data %>%
+      group_by(.data[[row_column]]) %>%
+      summarize(mean_value = mean(.data[[value_column]], na.rm = TRUE)) %>%
+      arrange(mean_value) %>%
+      pull(.data[[row_column]])
+    data <- data %>%
+      mutate(!!row_column := factor(.data[[row_column]], levels = row_order))
+  }
+  
+  # Apply the sorting order for the columns
+  if (!is.null(col_order_vec)) {
+    data <- data %>%
+      mutate(!!col_column := factor(.data[[col_column]], levels = col_order_vec))
+  } else if (sort_x) {
+    col_order <- data %>%
+      group_by(.data[[col_column]]) %>%
+      summarize(mean_value = mean(.data[[value_column]], na.rm = TRUE)) %>%
+      arrange(mean_value) %>%
+      pull(.data[[col_column]])
+    data <- data %>%
+      mutate(!!col_column := factor(.data[[col_column]], levels = col_order))
+  }
+  
+  
+  # Define the threshold for adaptive text color
+  adaptive_text_color <- function(value, threshold = 0.5) {
+    ifelse(value > threshold, "white", "black")
+  }
+  
+  # Create the heatmap
+  heatmap <- ggplot(data, aes(x = .data[[col_column]], y = .data[[row_column]])) +
+    geom_tile(aes(fill = .data[[value_column]]), color = "white", size = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", .data[[value_column]]), 
+                  color = adaptive_text_color(.data[[value_column]])), 
+              size = 6) +  # Add numbers to the heatmap
+    scale_color_identity() +  # Use the provided color values
+    scale_fill_gradientn(colors = brewer.pal(9, "Blues"), name = "", limits = c(0, 1)) +
+    theme_minimal(base_size = font_size) +  # Set base font size
+    theme(
+      plot.title = element_text(size = font_size + 4, hjust = 0.5, face = "bold"),
+      axis.text.x = element_text(size = font_size, angle = 45, hjust = 1, color = "black"),
+      axis.text.y = element_text(size = font_size, angle = 45, color = "black"),
+      legend.text = element_text(size = font_size, color = "black"),
+      legend.title = element_text(size = font_size),
+      legend.key.size = unit(1, "cm"),
+      panel.grid.major = element_blank(),  # Remove major grid lines
+      panel.grid.minor = element_blank(),   # Remove minor grid lines
+      legend.key = element_blank()
+    ) +
+    labs(title = title,
+         x = "",
+         y = "") +
+    guides(fill = guide_colorbar(barwidth = 1, barheight = 15, ticks = FALSE, 
+                                 breaks = c(0, 0.5, 1), labels = c("0", "0.5", "1")))  # Adjust legend size and breaks
+  
+  # Print the heatmap
+  print(heatmap)
+}
+
+
+model_order <- c("Claude-3", "Claude-3.5", "Reka Core", "GPT-4o")
+modality_order <- c("Histology", "Endoscopy", "CT", "MRI", "US", "Photography")
+```
+
+## Heatmap ODR / Modality
+```{r}
+#model_order <- c("Claude-3", "Claude-3.5", "Reka Core", "GPT-4o")
+
+odr_heatmap <- create_heatmap(summary_stats_2a2, value_column = "mean", title="Organ Detection Rate", font_size=18)
+ggsave(filename = paste0(fig_path, "ODR_Heatmap.svg"), plot = odr_heatmap, width=6.5, height=5, bg = "transparent")
+
+
+odr_heatmap_unsorted <- create_heatmap(summary_stats_2a2, value_column = "mean", title="Organ Detection Rate", font_size=18, sort_y=FALSE, row_order_vec=model_order)
+ggsave(filename = paste0(fig_path, "ODR_Heatmap_unsorted .svg"), plot = odr_heatmap_unsorted, width=6.5, height=5, bg = "transparent")
+```
+
+## Heatmap ASR / Modality
+```{r}
+modality_order <- c("Histology", "Endoscopy", "CT", "MRI", "US", "Photography")
+asr_heatmap <- create_heatmap(attack_success_rate, value_column = "Attack_Success_Rate", font_size=18, title="Attack Success Rate", sort_x=FALSE, col_order_vec = modality_order)
+
+ggsave(filename = paste0(fig_path, "ASR_Heatmap.svg"), plot = asr_heatmap, width=6.5, height=5, bg = "transparent")
+
+
+
+asr_heatmap_unsorted <- create_heatmap(attack_success_rate, value_column = "Attack_Success_Rate", font_size=18, title="Attack Success Rate", sort_x=FALSE)
+ggsave(filename = paste0(fig_path, "ASR_Heatmap_unsorted.svg"), plot = asr_heatmap, width=6.5, height=5, bg = "transparent")
+
+```
+
+## Heatmap LMR / Modality (No PI / PI)
+```{r}
+lmr_no_pi_permodality <- create_heatmap(attack_success_rate, value_column = "harmfulness_No Prompt Injection", font_size=18, title="LMR: Native Model", sort_x=FALSE, sort_y=FALSE, col_order_vec = modality_order, row_order_vec = model_order)
+ggsave(filename = paste0(fig_path, "LMR_no_inject_Heatmap.svg"), plot = lmr_no_pi_permodality, width=6.5, height=5, bg = "transparent")
+
+lmr_pi_permodality <- create_heatmap(attack_success_rate, value_column = "harmfulness_Prompt Injection", font_size=18, title=" LMR: Prompt Injection", sort_x=FALSE, sort_y=FALSE, col_order_vec = modality_order, row_order_vec = model_order)
+ggsave(filename = paste0(fig_path, "LMR_inject_Heatmap.svg"), plot = lmr_pi_permodality, width=6.5, height=5, bg = "transparent")
 
 
 
 ```
+
+
+## Heatmap Lesion Miss Rate / Modality
+```{r}
+#summary_stats_2e <- summary_stats_2e %>% rename(Model = model)
+# 
+# create_heatmap(summary_stats_2e, value_column = "mean", sort_by = "Model", title="Lesion Miss Rate")
+```
+
+```{r}
+# pi_position_heatmap <- create_heatmap(summary_stats_2c, value_column = "mean", row_column = "Model", col_column = "Position of adversarial prompt", title="Position of Prompt Injection", font_size=18)
+# ggsave(filename = paste0(fig_path, "PI_position_Heatmap.svg"), plot = pi_position_heatmap, width=6.5, height=5, bg = "transparent")
+```
+```
+
+
 

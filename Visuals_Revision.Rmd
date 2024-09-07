@@ -1,0 +1,474 @@
+---
+title: "Prompt injection Mitigation Visuals "
+output: html_document
+date: "2024-06-26"
+---
+
+# Libraries
+```{r}
+library(ggplot2)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(FSA)
+library(rstatix)
+options(scipen = 999)
+```
+
+
+# Export Statistics
+```{r}
+library(openxlsx)
+suppl_path <- "C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt_Injection_Attacks/Supplementary_Material_1.xlsx"
+
+export_stats_to_excel <- function(excel_file, sheet_name, summary_stats, p_values, overwrite_sheet = TRUE) {
+  # Load the workbook
+  wb <- loadWorkbook(excel_file)
+  
+  # Check if the sheet exists and handle according to overwrite_sheet parameter
+  if (sheet_name %in% names(wb)) {
+    if (overwrite_sheet) {
+      removeWorksheet(wb, sheet_name)
+      addWorksheet(wb, sheet_name)
+    } else {
+      stop(paste("Sheet", sheet_name, "already exists and overwrite_sheet is set to FALSE"))
+    }
+  } else {
+    addWorksheet(wb, sheet_name)
+  }
+  
+  # Write summary statistics
+  writeData(wb, sheet_name, "Summary Statistics", startRow = 1, startCol = 1)
+  writeData(wb, sheet_name, summary_stats, startRow = 2, startCol = 1)
+  
+  # Write p-values
+  start_row <- nrow(summary_stats) + 4
+  for (i in seq_along(p_values)) {
+    writeData(wb, sheet_name, names(p_values)[i], startRow = start_row, startCol = 1)
+    p_value_data <- p_values[[i]]
+    if (is.data.frame(p_value_data)) {
+      writeDataTable(wb, sheet_name, p_value_data, startRow = start_row + 1, startCol = 1)
+      start_row <- start_row + nrow(p_value_data) + 3
+    } else {
+      writeData(wb, sheet_name, capture.output(print(p_value_data)), startRow = start_row + 1, startCol = 1)
+      start_row <- start_row + length(capture.output(print(p_value_data))) + 2
+    }
+  }
+  
+  # Save the workbook
+  saveWorkbook(wb, excel_file, overwrite = TRUE)
+  
+  print(paste("Data has been exported to", sheet_name, "in the Excel file."))
+}
+
+```
+
+
+# Loading data
+```{r}
+data <- read_excel("C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt_Injection_Attacks/Mitigation_PI_revision.xlsx", sheet = "Ethical")
+
+data2 <- read_excel("C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt_Injection_Attacks/Mitigation_PI_revision.xlsx", sheet = "Agent")
+
+models_to_include <- c("GPT-4o", "Claude-3", "Claude-3.5", "Reka-Core")
+
+data <- data %>%
+  mutate(across(c(LMR_1, LMR_2, LMR_3), 
+                ~ifelse(. == "NA", NaN, as.numeric(.))))
+
+data2 <- data2 %>%
+  mutate(across(c(LMR_1, LMR_2, LMR_3), 
+                ~ifelse(. == "NA", NaN, as.numeric(.))))
+
+
+label_size <- 20
+
+fig_path <- "C:/Users/janni/OneDrive/Dokumente/PostDoc/Prompt_Injection_Attacks/Figures/"
+
+```
+
+```{r}
+
+```
+
+
+
+```{r}
+custom_theme <- theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 10, colour = "black", angle = 45, hjust = 1, vjust = 1),
+    axis.text.y = element_text(size = 10, colour = "black"),
+    axis.title.y = element_text(size = 10, vjust = 2),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.margin = margin(1, 1, 2, 0.5, "cm")
+  )
+
+custom_colors_1 <- c("#22628F", "#20B38E", "#CC9439", "#BD672A")
+custom_colors <- c("#999999", "#20B38E", "#CC9439", "#BD672A")
+custom_colors_2 <- c("#20B38E", "#CC9439", "#BD672A")
+```
+
+# Figure 4
+
+### Circle Plot Default vs Ethical
+```{r}
+
+data_long <- data %>%
+  pivot_longer(
+    cols = c(starts_with("Result"), starts_with("LMR")),
+    names_to = c(".value", "set"),
+    names_pattern = "(.+?)(\\d)$",
+    values_to = "value"
+  ) 
+
+
+# Define label size
+label_size <- 22
+data_long <- data_long[!is.na(data_long$LMR_) & data_long$LMR_ %in% c(0, 1), ]
+
+data_long$LMR_ <- ifelse(data_long$LMR_ == 0, "failed",
+                         ifelse(data_long$LMR_ == 1, "successful", data_long$LMR_))
+  
+
+model_variations <- unique(data_long$`Prompt Variation`)
+
+for (variation in model_variations) {
+  # Filter data for current Model Variation
+  variation_data <- data_long %>% filter(`Prompt Variation` == variation)
+  
+  # Get unique models for this variation
+  models_to_include <- unique(variation_data$`Model Name`)
+  
+  for (model in models_to_include) {
+    filtered_data <- variation_data %>% filter(`Model Name` == model)
+    summary_counts <- filtered_data %>%
+      group_by(`LMR_`) %>%
+      summarize(count = n())
+    
+    # Create the circle plot
+    plot_circle <- ggplot(summary_counts, aes(x = "", y = count, fill = `LMR_`)) +
+      geom_col(width = 1, color = "white") +
+      geom_text(aes(label = count), 
+                position = position_stack(vjust = 0.5), 
+                color = "black", size = label_size * 0.6) +
+      coord_polar(theta = "y") +
+      labs(fill = "Prompt variation", x = NULL, y = NULL, 
+           title = paste(model)) +
+      theme_void() +
+      theme(
+        plot.title = element_text(size = label_size * 1.5, hjust = 0.5, vjust=-1),
+        legend.position = "",
+        #legend.direction = "vertical",
+        #legend.title = element_text(size = label_size * 1.5),
+        #legend.text = element_text(size = label_size * 1.5),
+        strip.text = element_text(size = label_size * 1.5),
+        plot.margin = margin(1, 1, 1, 1, "cm")
+      ) +
+      scale_fill_manual(values = c("successful" = "#fbc9c4", "failed" = "grey"))
+    
+    # Print the plot
+    print(plot_circle)
+    
+    # Save the plot
+    ggsave(filename = paste0(fig_path, "PI_Defense_Circle_Plot_", model, "_", variation, ".svg"), 
+           plot = plot_circle, width = 6, height = 6, bg = "transparent")
+  }
+}
+```
+## Circle Plot Agent +/- Ethical
+```{r}
+models_to_include2 <- c("Claude-3", "Claude-3.5", "GPT-4o", "Reka-Core")
+
+#sum(data_long2$LMR_[(data_long2$`Model Name` == "Claude-3.5") & (data_long2$`Prompt Variation` == "Ethical supervisor") ])
+
+
+data_long2 <- data2 %>%
+  pivot_longer(
+    cols = c(starts_with("Result"), starts_with("LMR")),
+    names_to = c(".value", "set"),
+    names_pattern = "(.+?)(\\d)$",
+    values_to = "value"
+  ) 
+
+
+# Define label size
+label_size <- 22
+data_long2 <- data_long2[!is.na(data_long2$LMR_) & data_long2$LMR_ %in% c(0, 1), ]
+
+data_long2$LMR_ <- ifelse(data_long2$LMR_ == 0, "failed",
+                         ifelse(data_long2$LMR_ == 1, "successful", data_long2$LMR_))
+  
+
+model_variations <- unique(data_long2$`Prompt Variation`)
+
+for (variation in model_variations) {
+  # Filter data for current Model Variation
+  variation_data <- data_long2 %>% filter(`Prompt Variation` == variation)
+  
+  # Get unique models for this variation
+  models_to_include <- unique(variation_data$`Model Name`)
+  
+  for (model in models_to_include2) {
+    filtered_data <- variation_data %>% filter(`Model Name` == model)
+    summary_counts <- filtered_data %>%
+      group_by(`LMR_`) %>%
+      summarize(count = n())
+    
+    # Create the circle plot
+    plot_circle <- ggplot(summary_counts, aes(x = "", y = count, fill = `LMR_`)) +
+      geom_col(width = 1, color = "white") +
+      geom_text(aes(label = count), 
+                position = position_stack(vjust = 0.5), 
+                color = "black", size = label_size * 0.6) +
+      coord_polar(theta = "y") +
+      labs(fill = "Prompt variation", x = NULL, y = NULL, 
+           title = paste(model)) +
+      theme_void() +
+      theme(
+        plot.title = element_text(size = label_size * 1.5, hjust = 0.5, vjust=-1),
+        legend.position = "",
+        #legend.direction = "vertical",
+        #legend.title = element_text(size = label_size * 1.5),
+        #legend.text = element_text(size = label_size * 1.5),
+        strip.text = element_text(size = label_size * 1.5),
+        plot.margin = margin(1, 1, 1, 1, "cm")
+      ) +
+      scale_fill_manual(values = c("successful" = "#fbc9c4", "failed" = "grey"))
+    
+    # Print the plot
+    print(plot_circle)
+    
+    # Save the plot
+    ggsave(filename = paste0(fig_path, "PI_Defense_AgentCircle_Plot_", model, "_", variation, ".svg"), 
+           plot = plot_circle, width = 8, height = 6, bg = "transparent")
+  }
+}
+```
+# Summary statistics:
+## Descriptive stats
+```{r}
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+data_all <- rbind(data_long, data_long2)
+
+data_summary <- data_all %>%
+  group_by(`Model Name`, `Prompt Variation`) %>%
+  summarize(
+    successful_count = sum(LMR_ == "successful", na.rm = TRUE),
+    failed_count = sum(LMR_ == "failed", na.rm = TRUE),
+    total = n(),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    missing = 54 - total,
+    successful_prop = successful_count / total,
+    failed_prop = failed_count / total,
+    missing_prop = missing / total,
+    successful_percent = sprintf("%.1f%%", successful_prop * 100),
+    failed_percent = sprintf("%.1f%%", failed_prop * 100),
+    missing_percent = sprintf("%.1f%%", missing_prop * 100)
+  )
+```
+
+## Fisher#s test + export
+```{r}
+perform_fishers_test <- function(data, scenario1, scenario2) {
+  tryCatch({
+    contingency_table <- table(data$LMR_[data$"Prompt Variation" %in% c(scenario1, scenario2)],
+                               data$"Prompt Variation"[data$"Prompt Variation" %in% c(scenario1, scenario2)])
+    
+    if (nrow(contingency_table) < 2 || ncol(contingency_table) < 2) {
+      return(paste("Insufficient data for", scenario1, "vs", scenario2))
+    }
+    
+    fisher_test <- fisher.test(contingency_table)
+    return(fisher_test$p.value)
+  }, error = function(e) {
+    return(paste("Error in test for", scenario1, "vs", scenario2, ":", e$message))
+  })
+}
+
+models <- unique(data_all$"Model Name")
+scenarios <- c("Default", "Ethical", "Supervisor", "Ethical supervisor")
+
+results <- map_df(models, function(model) {
+  model_data <- data_all %>% filter(`Model Name` == model)
+  
+  if (nrow(model_data) == 0) {
+    return(tibble(
+      Model = model,
+      `Default vs Ethical` = "No data for this model",
+      `Default vs Supervisor` = "No data for this model",
+      `Default vs Ethical supervisor` = "No data for this model",
+      `Ethical vs Supervisor` = "No data for this model",
+      `Ethical vs Ethical supervisor` = "No data for this model",
+      `Supervisor vs Ethical supervisor` = "No data for this model"
+    ))
+  }
+  
+  # All combinations
+  comparisons <- c(
+    perform_fishers_test(model_data, "Default", "Ethical"),
+    perform_fishers_test(model_data, "Default", "Supervisor"),
+    perform_fishers_test(model_data, "Default", "Ethical supervisor"),
+    perform_fishers_test(model_data, "Ethical", "Supervisor"),
+    perform_fishers_test(model_data, "Ethical", "Ethical supervisor"),
+    perform_fishers_test(model_data, "Supervisor", "Ethical supervisor")
+  )
+  
+  tibble(
+    Model = model,
+    `Default vs Ethical` = comparisons[1],
+    `Default vs Supervisor` = comparisons[2],
+    `Default vs Ethical supervisor` = comparisons[3],
+    `Ethical vs Supervisor` = comparisons[4],
+    `Ethical vs Ethical supervisor` = comparisons[5],
+    `Supervisor vs Ethical supervisor` = comparisons[6]
+  )
+})
+
+# Apply Bonferroni correction
+results_with_bonferroni <- results %>%
+  mutate(across(-Model, ~ if(is.numeric(.)) p.adjust(., method = "bonferroni", n = 6) else .))
+
+# Display results
+print(results_with_bonferroni)
+
+
+export_stats_to_excel(
+  excel_file = suppl_path,
+  sheet_name = "ST10 Statistics Figure 4",
+  summary_stats = data_summary,
+  p_values = results_with_bonferroni
+)
+```
+
+```{r}
+# library(ggplot2)
+# library(dplyr)
+# 
+
+# 
+# # Version 1: Models next to each other
+# plot_v1 <- ggplot(data_summary, aes(x = `Prompt Variation`, y = successful, fill = `Model Name`)) +
+#   geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+#   geom_bar(aes(y = failed), stat = "identity", position = position_dodge(width = 0.9)) +
+#   scale_fill_brewer(palette = "Set2") +
+#   labs(y = "Proportion") +
+#   theme_minimal() +
+#   theme(
+#     axis.title.x = element_blank(),
+#     axis.text.x = element_text(size = 12, colour = "black", angle = 45, hjust = 1),
+#     axis.text.y = element_text(size = 12, colour = "black"),
+#     axis.title.y = element_text(size = 14),
+#     legend.title = element_blank(),
+#     legend.text = element_text(size = 12),
+#     panel.grid.minor = element_blank(),
+#     panel.border = element_rect(colour = "black", fill = NA, size = 1),
+#     plot.margin = margin(0.5, 0.5, 1, 0.5, "cm")
+#   ) +
+#   scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+#   coord_fixed(ratio = 4 / 1)
+# 
+# # Save the plot
+# ggsave(filename = "LMR_by_Model_and_Prompt.svg", plot = plot_v1, width = 12, height = 6, bg = "transparent")
+# print(plot_v1)
+```
+
+
+```{r}
+# library(ggplot2)
+# library(dplyr)
+# 
+# plot_v2 <- ggplot(data_summary, aes(x = `Model Name`, y = successful, fill = `Prompt Variation`)) +
+#   geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+#   geom_bar(aes(y = failed), stat = "identity", position = position_dodge(width = 0.9)) +
+#   scale_fill_manual(values = c("Default" = "#999999", "Ethical" = "#fbc9c4", 
+#                                "Supervisor" = "#e6e6e6", "Ethical supervisor" = "#ffdab9")) +
+#   labs(y = "Proportion") +
+#   theme_minimal() +
+#   theme(
+#     axis.title.x = element_blank(),
+#     axis.text.x = element_text(size = 12, colour = "black", angle = 45, hjust = 1),
+#     axis.text.y = element_text(size = 12, colour = "black"),
+#     axis.title.y = element_text(size = 14),
+#     legend.title = element_blank(),
+#     legend.text = element_text(size = 12),
+#     panel.grid.minor = element_blank(),
+#     panel.border = element_rect(colour = "black", fill = NA, size = 1),
+#     plot.margin = margin(0.5, 0.5, 1, 0.5, "cm")
+#   ) +
+#   scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+#   coord_fixed(ratio = 4 / 1)
+# 
+# # Save the plot
+# ggsave(filename = "LMR_by_Prompt_and_Model.svg", plot = plot_v2, width = 12, height = 6, bg = "transparent")
+# 
+# print(plot_v2)
+```
+
+
+```{r}
+# library(ggplot2)
+# library(dplyr)
+# library(tidyr)
+# 
+# # Prepare the data
+# data_summary <- data_all %>%
+#   group_by(`Model Name`, `Prompt Variation`) %>%
+#   summarize(
+#     successful = mean(LMR_ == "successful", na.rm = TRUE),
+#     failed = mean(LMR_ == "failed", na.rm = TRUE),
+#     .groups = 'drop'
+#   ) %>%
+#   pivot_longer(cols = c(successful, failed), names_to = "LMR", values_to = "Proportion")
+# 
+# # Function to create stacked bar plot
+# create_stacked_plot <- function(data, x_var, fill_var, base_size = 18) {
+#   ggplot(data, aes_string(x = x_var, y = "Proportion", fill = "LMR")) +
+#     geom_bar(stat = "identity", position = "stack", width = 0.7) +
+#     geom_text(aes(label = sprintf("%.1f%%", Proportion * 100)), 
+#               position = position_stack(vjust = 0.5), 
+#               size = base_size * 0.3, colour = "black") +
+#     scale_fill_manual(values = c("successful" = "#fbc9c4", "failed" = "grey")) +
+#     facet_wrap(as.formula(paste("~", fill_var)), scales = "free_x", nrow = 1) +
+#     labs(y = "Proportion") +
+#     theme_minimal() +
+#     theme(
+#       axis.title.x = element_blank(),
+#       axis.text.x = element_text(size = base_size * 0.7, colour = "black", angle = 45, hjust = 1),
+#       axis.text.y = element_text(size = base_size * 0.7, colour = "black"),
+#       axis.title.y = element_text(size = base_size * 0.8),
+#       legend.title = element_blank(),
+#       legend.text = element_text(size = base_size * 0.7),
+#       strip.text = element_text(size = base_size * 0.8),
+#       panel.grid.major = element_blank(),
+#       panel.grid.minor = element_blank(),
+#       panel.border = element_rect(colour = "black", fill = NA, size = 1),
+#       plot.margin = margin(0.5, 0.5, 1, 0.5, "cm")
+#     ) +
+#     scale_y_continuous(limits = c(0, 1), expand = c(0, 0), labels = scales::percent) +
+#     coord_cartesian(clip = "off")
+# }
+# 
+# # Version 1: Models next to each other for each Prompt Variation
+# plot_v1 <- create_stacked_plot(data_summary, "Model Name", "Prompt Variation")
+# print(plot_v1)
+# ggsave(filename = "LMR_by_Model_and_Prompt.svg", plot = plot_v1, width = 16, height = 8, bg = "transparent")
+# 
+# # Version 2: Prompt Variations next to each other for each Model
+# plot_v2 <- create_stacked_plot(data_summary, "Prompt Variation", "Model Name")
+# print(plot_v2)
+# ggsave(filename = "LMR_by_Prompt_and_Model.svg", plot = plot_v2, width = 16, height = 8, bg = "transparent")
+```
+
+
+
